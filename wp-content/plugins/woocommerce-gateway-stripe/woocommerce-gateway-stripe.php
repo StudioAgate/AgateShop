@@ -5,12 +5,13 @@
  * Description: Take credit card payments on your store using Stripe.
  * Author: WooCommerce
  * Author URI: https://woocommerce.com/
- * Version: 4.0.4
+ * Version: 4.0.5
  * Requires at least: 4.4
  * Tested up to: 4.9
  * WC requires at least: 2.6
  * WC tested up to: 3.3
  * Text Domain: woocommerce-gateway-stripe
+ * Domain Path: /languages/
  *
  */
 
@@ -22,7 +23,7 @@ if ( ! class_exists( 'WC_Stripe' ) ) :
 	/**
 	 * Required minimums and constants
 	 */
-	define( 'WC_STRIPE_VERSION', '4.0.4' );
+	define( 'WC_STRIPE_VERSION', '4.0.5' );
 	define( 'WC_STRIPE_MIN_PHP_VER', '5.6.0' );
 	define( 'WC_STRIPE_MIN_WC_VER', '2.6.0' );
 	define( 'WC_STRIPE_MAIN_FILE', __FILE__ );
@@ -291,20 +292,22 @@ if ( ! class_exists( 'WC_Stripe' ) ) :
 				if ( $testmode ) {
 					if (
 						! empty( $test_pub_key ) && ! preg_match( '/^pk_test_/', $test_pub_key )
-						|| ! empty( $test_secret_key ) && ! preg_match( '/^sk_test_/', $test_secret_key ) )
+						|| ( ! empty( $test_secret_key ) && ! preg_match( '/^sk_test_/', $test_secret_key )
+						&& ! empty( $test_secret_key ) && ! preg_match( '/^rk_test_/', $test_secret_key ) ) )
 					{
 						$setting_link = $this->get_setting_link();
 						/* translators: 1) link */
-						$this->add_admin_notice( 'keys', 'notice notice-error', sprintf( __( 'Stripe is in test mode however your test keys may not be valid. Test keys start with pk_test and sk_test. Please go to your settings and, <a href="%s">set your Stripe account keys</a>.', 'woocommerce-gateway-stripe' ), $setting_link ), true );
+						$this->add_admin_notice( 'keys', 'notice notice-error', sprintf( __( 'Stripe is in test mode however your test keys may not be valid. Test keys start with pk_test and sk_test or rk_test. Please go to your settings and, <a href="%s">set your Stripe account keys</a>.', 'woocommerce-gateway-stripe' ), $setting_link ), true );
 					}
 				} else {
 					if (
 						! empty( $live_pub_key ) && ! preg_match( '/^pk_live_/', $live_pub_key )
-						|| ! empty( $live_secret_key ) && ! preg_match( '/^sk_live_/', $live_secret_key ) )
+						|| ( ! empty( $live_secret_key ) && ! preg_match( '/^sk_live_/', $live_secret_key )
+						&& ! empty( $live_secret_key ) && ! preg_match( '/^rk_live_/', $live_secret_key ) ) )
 					{
 						$setting_link = $this->get_setting_link();
 						/* translators: 1) link */
-						$this->add_admin_notice( 'keys', 'notice notice-error', sprintf( __( 'Stripe is in live mode however your test keys may not be valid. Live keys start with pk_live and sk_live. Please go to your settings and, <a href="%s">set your Stripe account keys</a>.', 'woocommerce-gateway-stripe' ), $setting_link ), true );
+						$this->add_admin_notice( 'keys', 'notice notice-error', sprintf( __( 'Stripe is in live mode however your test keys may not be valid. Live keys start with pk_live and sk_live or rk_live. Please go to your settings and, <a href="%s">set your Stripe account keys</a>.', 'woocommerce-gateway-stripe' ), $setting_link ), true );
 					}
 				}
 			}

@@ -15,6 +15,21 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 	const META_NAME_NET = 'Net Revenue From Stripe';
 
 	/**
+	 * Checks to see if request is invalid and that
+	 * they are worth retrying.
+	 *
+	 * @since 4.0.5
+	 * @param array $error
+	 */
+	public function is_retryable_error( $error ) {
+		return (
+			'invalid_request_error' === $error->type ||
+			'idempotency_error' === $error->type ||
+			'rate_limit_error' === $error->type
+		);
+	}
+
+	/**
 	 * Check if this gateway is enabled
 	 */
 	public function is_available() {
@@ -199,6 +214,11 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 
 				$post_data['capture'] = $capture ? 'true' : 'false';
 				break;
+			case 'stripe_sepa':
+				if ( ! empty( $statement_descriptor ) ) {
+					$post_data['statement_descriptor'] = WC_Stripe_Helper::clean_statement_descriptor( $statement_descriptor );
+				}
+				break;
 		}
 
 		$post_data['expand[]'] = 'balance_transaction';
@@ -264,7 +284,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 					WC_Stripe_Helper::is_pre_30() ? $order->reduce_order_stock() : wc_reduce_stock_levels( $order_id );
 				}
 
-				WC_Stripe_Helper::is_pre_30() ? update_post_meta( $order_id, '_transaction_id', $response->id, true ) : $order->set_transaction_id( $response->id );
+				WC_Stripe_Helper::is_pre_30() ? update_post_meta( $order_id, '_transaction_id', $response->id ) : $order->set_transaction_id( $response->id );
 				/* translators: transaction id */
 				$order->update_status( 'on-hold', sprintf( __( 'Stripe charge awaiting payment: %s.', 'woocommerce-gateway-stripe' ), $response->id ) );
 			}
@@ -283,7 +303,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 				throw new WC_Stripe_Exception( print_r( $response, true ), $localized_message );
 			}
 		} else {
-			WC_Stripe_Helper::is_pre_30() ? update_post_meta( $order_id, '_transaction_id', $response->id, true ) : $order->set_transaction_id( $response->id );
+			WC_Stripe_Helper::is_pre_30() ? update_post_meta( $order_id, '_transaction_id', $response->id ) : $order->set_transaction_id( $response->id );
 
 			if ( $order->has_status( array( 'pending', 'failed' ) ) ) {
 				WC_Stripe_Helper::is_pre_30() ? $order->reduce_order_stock() : wc_reduce_stock_levels( $order_id );
@@ -357,7 +377,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 	 */
 	public function get_source_object() {
 		$source = ! empty( $_POST['stripe_source'] ) ? wc_clean( $_POST['stripe_source'] ) : '';
-		
+
 		if ( empty( $source ) ) {
 			return '';
 		}
@@ -648,27 +668,36 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			return false;
 		}
 
-		$body = array();
+		$request = array();
 
 		if ( WC_Stripe_Helper::is_pre_30() ) {
 			$order_currency = get_post_meta( $order_id, '_order_currency', true );
+			$captured       = get_post_meta( $order_id, '_stripe_charge_captured', true );
 		} else {
 			$order_currency = $order->get_currency();
+			$captured       = $order->get_meta( '_stripe_charge_captured', true );
 		}
 
 		if ( ! is_null( $amount ) ) {
-			$body['amount'] = WC_Stripe_Helper::get_stripe_amount( $amount, $order_currency );
+			$request['amount'] = WC_Stripe_Helper::get_stripe_amount( $amount, $order_currency );
+		}
+
+		// If order is only authorized, don't pass amount.
+		if ( 'yes' !== $captured ) {
+			unset( $request['amount'] );
 		}
 
 		if ( $reason ) {
-			$body['metadata'] = array(
+			$request['metadata'] = array(
 				'reason' => $reason,
 			);
 		}
 
+		$request['charge'] = $order->get_transaction_id();
+
 		WC_Stripe_Logger::log( "Info: Beginning refund for order {$order->get_transaction_id()} for the amount of {$amount}" );
 
-		$response = WC_Stripe_API::request( $body, 'charges/' . $order->get_transaction_id() . '/refunds' );
+		$response = WC_Stripe_API::request( $request, 'refunds' );
 
 		if ( ! empty( $response->error ) ) {
 			WC_Stripe_Logger::log( 'Error: ' . $response->error->message );
@@ -689,7 +718,8 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			}
 
 			/* translators: 1) dollar amount 2) transaction id 3) refund message */
-			$refund_message = sprintf( __( 'Refunded %1$s - Refund ID: %2$s - Reason: %3$s', 'woocommerce-gateway-stripe' ), $amount, $response->id, $reason );
+			$refund_message = ( isset( $captured ) && 'yes' === $captured ) ? sprintf( __( 'Refunded %1$s - Refund ID: %2$s - Reason: %3$s', 'woocommerce-gateway-stripe' ), $amount, $response->id, $reason ) : __( 'Pre-Authorization Released', 'woocommerce-gateway-stripe' );
+
 			$order->add_order_note( $refund_message );
 			WC_Stripe_Logger::log( 'Success: ' . html_entity_decode( strip_tags( $refund_message ) ) );
 

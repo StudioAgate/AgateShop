@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  * @extends WC_Payment_Gateway
  */
 class WC_Gateway_Stripe extends WC_Stripe_Payment_Gateway {
+	public $retry_interval;
+
 	/**
 	 * Should we capture Credit cards
 	 *
@@ -111,6 +113,7 @@ class WC_Gateway_Stripe extends WC_Stripe_Payment_Gateway {
 	 * Constructor
 	 */
 	public function __construct() {
+		$this->retry_interval       = 2;
 		$this->id                   = 'stripe';
 		$this->method_title         = __( 'Stripe', 'woocommerce-gateway-stripe' );
 		/* translators: 1) link to Stripe register page 2) link to Stripe api keys page */
@@ -682,6 +685,26 @@ class WC_Gateway_Stripe extends WC_Stripe_Payment_Gateway {
 							return $this->process_payment( $order_id, false, $force_save_source );
 						} else {
 							$localized_message = 'API connection error and retries exhausted.';
+							$order->add_order_note( $localized_message );
+							throw new WC_Stripe_Exception( print_r( $response, true ), $localized_message );
+						}
+					}
+
+					// We want to retry.
+					if ( $this->is_retryable_error( $response->error ) ) {
+						if ( $retry ) {
+							// Don't do anymore retries after this.
+							if ( 5 <= $this->retry_interval ) {
+
+								return $this->process_payment( $order_id, false, $force_save_source );
+							}
+
+							sleep( $this->retry_interval );
+
+							$this->retry_interval++;
+							return $this->process_payment( $order_id, true, $force_save_source );
+						} else {
+							$localized_message = __( 'On going requests error and retries exhausted.', 'woocommerce-gateway-stripe' );
 							$order->add_order_note( $localized_message );
 							throw new WC_Stripe_Exception( print_r( $response, true ), $localized_message );
 						}
