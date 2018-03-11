@@ -25,7 +25,9 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 		return (
 			'invalid_request_error' === $error->type ||
 			'idempotency_error' === $error->type ||
-			'rate_limit_error' === $error->type
+			'rate_limit_error' === $error->type ||
+			'api_connection_error' === $error->type ||
+			'api_error' === $error->type
 		);
 	}
 
@@ -181,15 +183,24 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 	}
 
 	/**
+	 * Is $order_id a subscription?
+	 * @param  int  $order_id
+	 * @return boolean
+	 */
+	public function has_subscription( $order_id ) {
+		return ( function_exists( 'wcs_order_contains_subscription' ) && ( wcs_order_contains_subscription( $order_id ) || wcs_is_subscription( $order_id ) || wcs_order_contains_renewal( $order_id ) ) );
+	}
+
+	/**
 	 * Generate the request for the payment.
 	 *
 	 * @since 3.1.0
 	 * @version 4.0.0
 	 * @param  WC_Order $order
-	 * @param  object $source
+	 * @param  object $prepared_source
 	 * @return array()
 	 */
-	public function generate_payment_request( $order, $source ) {
+	public function generate_payment_request( $order, $prepared_source ) {
 		$settings                          = get_option( 'woocommerce_stripe_settings', array() );
 		$statement_descriptor              = ! empty( $settings['statement_descriptor'] ) ? str_replace( "'", '', $settings['statement_descriptor'] ) : '';
 		$capture                           = ! empty( $settings['capture'] ) && 'yes' === $settings['capture'] ? true : false;
@@ -229,14 +240,21 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			'order_id' => WC_Stripe_Helper::is_pre_30() ? $order->id : $order->get_id(),
 		);
 
-		$post_data['metadata'] = apply_filters( 'wc_stripe_payment_metadata', $metadata, $order, $source );
-
-		if ( $source->customer ) {
-			$post_data['customer'] = $source->customer;
+		if ( $this->has_subscription( WC_Stripe_Helper::is_pre_30() ? $order->id : $order->get_id() ) ) {
+			$metadata += array(
+				'payment_type' => 'recurring',
+				'site_url'     => esc_url( get_site_url() ),
+			);
 		}
 
-		if ( $source->source ) {
-			$post_data['source'] = $source->source;
+		$post_data['metadata'] = apply_filters( 'wc_stripe_payment_metadata', $metadata, $order, $prepared_source );
+
+		if ( $prepared_source->customer ) {
+			$post_data['customer'] = $prepared_source->customer;
+		}
+
+		if ( $prepared_source->source ) {
+			$post_data['source'] = $prepared_source->source;
 		}
 
 		/**
@@ -247,7 +265,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 		 * @param WC_Order $order
 		 * @param object $source
 		 */
-		return apply_filters( 'wc_stripe_generate_payment_request', $post_data, $order, $source );
+		return apply_filters( 'wc_stripe_generate_payment_request', $post_data, $order, $prepared_source );
 	}
 
 	/**
@@ -260,10 +278,10 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 
 		$captured = ( isset( $response->captured ) && $response->captured ) ? 'yes' : 'no';
 
-		// Store charge data
+		// Store charge data.
 		WC_Stripe_Helper::is_pre_30() ? update_post_meta( $order_id, '_stripe_charge_captured', $captured ) : $order->update_meta_data( '_stripe_charge_captured', $captured );
 
-		// Store other data such as fees
+		// Store other data such as fees.
 		if ( isset( $response->balance_transaction ) && isset( $response->balance_transaction->fee ) ) {
 			// Fees and Net needs to both come from Stripe to be accurate as the returned
 			// values are in the local currency of the Stripe account, not from WC.
@@ -280,7 +298,9 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			 * take care of the status changes.
 			 */
 			if ( 'pending' === $response->status ) {
-				if ( ! wc_string_to_bool( get_post_meta( $order_id, '_order_stock_reduced', true ) ) ) {
+				$order_stock_reduced = WC_Stripe_Helper::is_pre_30() ? get_post_meta( $order_id, '_order_stock_reduced', true ) : $order->get_meta( '_order_stock_reduced', true );
+
+				if ( ! $order_stock_reduced ) {
 					WC_Stripe_Helper::is_pre_30() ? $order->reduce_order_stock() : wc_reduce_stock_levels( $order_id );
 				}
 
@@ -371,18 +391,17 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 	}
 
 	/**
-	 * Create source object by source id.
+	 * Get source object by source id.
 	 *
 	 * @since 4.0.3
+	 * @param string $source_id The source ID to get source object for.
 	 */
-	public function get_source_object() {
-		$source = ! empty( $_POST['stripe_source'] ) ? wc_clean( $_POST['stripe_source'] ) : '';
-
-		if ( empty( $source ) ) {
+	public function get_source_object( $source_id = '' ) {
+		if ( empty( $source_id ) ) {
 			return '';
 		}
 
-		$source_object = WC_Stripe_API::retrieve( 'sources/' . $source );
+		$source_object = WC_Stripe_API::retrieve( 'sources/' . $source_id );
 
 		if ( ! empty( $source_object->error ) ) {
 			throw new WC_Stripe_Exception( print_r( $source_object, true ), $source_object->error->message );
@@ -415,6 +434,17 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 	 */
 	public function is_3ds_card( $source_object ) {
 		return ( $source_object && 'three_d_secure' === $source_object->type );
+	}
+
+	/**
+	 * Checks if card is a prepaid card.
+	 *
+	 * @since 4.0.6
+	 * @param object $source_object
+	 * @return bool
+	 */
+	public function is_prepaid_card( $source_object ) {
+		return ( $source_object && 'token' === $source_object->object && 'prepaid' === $source_object->card->funding );
 	}
 
 	/**
@@ -452,24 +482,26 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 	 *
 	 * @since 3.1.0
 	 * @version 4.0.0
-	 * @param object $source_object
 	 * @param string $user_id
 	 * @param bool $force_save_source Should we force save payment source.
 	 *
 	 * @throws Exception When card was not added or for and invalid card.
 	 * @return object
 	 */
-	public function prepare_source( $source_object = '', $user_id, $force_save_source = false ) {
+	public function prepare_source( $user_id, $force_save_source = false ) {
 		$customer           = new WC_Stripe_Customer( $user_id );
 		$set_customer       = true;
 		$force_save_source  = apply_filters( 'wc_stripe_force_save_source', $force_save_source, $customer );
+		$source_object      = '';
 		$source_id          = '';
 		$wc_token_id        = false;
 		$payment_method     = isset( $_POST['payment_method'] ) ? wc_clean( $_POST['payment_method'] ) : 'stripe';
+		$is_token           = false;
 
 		// New CC info was entered and we have a new source to process.
-		if ( ! empty( $source_object ) ) {
-			$source_id = $source_object->id;
+		if ( ! empty( $_POST['stripe_source'] ) ) {
+			$source_object = self::get_source_object( wc_clean( $_POST['stripe_source'] ) );
+			$source_id     = $source_object->id;
 
 			// This checks to see if customer opted to save the payment method to file.
 			$maybe_saved_card = isset( $_POST[ 'wc-' . $payment_method . '-new-payment-method' ] ) && ! empty( $_POST[ 'wc-' . $payment_method . '-new-payment-method' ] );
@@ -487,7 +519,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 				}
 			}
 		} elseif ( isset( $_POST[ 'wc-' . $payment_method . '-payment-token' ] ) && 'new' !== $_POST[ 'wc-' . $payment_method . '-payment-token' ] ) {
-			// Use an existing token, and then process the payment
+			// Use an existing token, and then process the payment.
 			$wc_token_id = wc_clean( $_POST[ 'wc-' . $payment_method . '-payment-token' ] );
 			$wc_token    = WC_Payment_Tokens::get( $wc_token_id );
 
@@ -497,6 +529,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			}
 
 			$source_id = $wc_token->get_token();
+			$is_token  = true;
 		} elseif ( isset( $_POST['stripe_token'] ) && 'new' !== $_POST['stripe_token'] ) {
 			$stripe_token     = wc_clean( $_POST['stripe_token'] );
 			$maybe_saved_card = isset( $_POST[ 'wc-' . $payment_method . '-new-payment-method' ] ) && ! empty( $_POST[ 'wc-' . $payment_method . '-new-payment-method' ] );
@@ -511,6 +544,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			} else {
 				$set_customer = false;
 				$source_id    = $stripe_token;
+				$is_token     = true;
 			}
 		}
 
@@ -520,10 +554,15 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			$customer_id = $customer->get_id() ? $customer->get_id() : false;
 		}
 
+		if ( empty( $source_object ) && ! $is_token ) {
+			$source_object = self::get_source_object( $source_id );
+		}
+
 		return (object) array(
-			'token_id' => $wc_token_id,
-			'customer' => $customer_id,
-			'source'   => $source_id,
+			'token_id'      => $wc_token_id,
+			'customer'      => $customer_id,
+			'source'        => $source_id,
+			'source_object' => $source_object,
 		);
 	}
 
@@ -624,7 +663,7 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 	 * e.g usage would be after a refund.
 	 *
 	 * @since 4.0.0
-	 * @version 4.0.0
+	 * @version 4.0.6
 	 * @param object $order The order object
 	 * @param int $balance_transaction_id
 	 */
@@ -637,8 +676,16 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			if ( isset( $balance_transaction ) && isset( $balance_transaction->fee ) ) {
 				// Fees and Net needs to both come from Stripe to be accurate as the returned
 				// values are in the local currency of the Stripe account, not from WC.
-				$fee = ! empty( $balance_transaction->fee ) ? WC_Stripe_Helper::format_balance_fee( $balance_transaction, 'fee' ) : 0;
-				$net = ! empty( $balance_transaction->net ) ? WC_Stripe_Helper::format_balance_fee( $balance_transaction, 'net' ) : 0;
+				$fee_refund = ! empty( $balance_transaction->fee ) ? WC_Stripe_Helper::format_balance_fee( $balance_transaction, 'fee' ) : 0;
+				$net_refund = ! empty( $balance_transaction->net ) ? WC_Stripe_Helper::format_balance_fee( $balance_transaction, 'net' ) : 0;
+
+				// Current data fee & net.
+				$fee_current = WC_Stripe_Helper::is_pre_30() ? get_post_meta( $order_id, self::META_NAME_FEE, true ) : $order->get_meta( self::META_NAME_FEE, true );
+				$net_current = WC_Stripe_Helper::is_pre_30() ? get_post_meta( $order_id, self::META_NAME_NET, true ) : $order->get_meta( self::META_NAME_NET, true );
+
+				// Calculation.
+				$fee = (float) $fee_current + (float) $fee_refund;
+				$net = (float) $net_current + (float) $net_refund;
 
 				WC_Stripe_Helper::is_pre_30() ? update_post_meta( $order_id, self::META_NAME_FEE, $fee ) : $order->update_meta_data( self::META_NAME_FEE, $fee );
 				WC_Stripe_Helper::is_pre_30() ? update_post_meta( $order_id, self::META_NAME_NET, $net ) : $order->update_meta_data( self::META_NAME_NET, $net );
@@ -696,6 +743,8 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 		$request['charge'] = $order->get_transaction_id();
 
 		WC_Stripe_Logger::log( "Info: Beginning refund for order {$order->get_transaction_id()} for the amount of {$amount}" );
+
+		$request = apply_filters( 'wc_stripe_refund_request', $request, $order );
 
 		$response = WC_Stripe_API::request( $request, 'refunds' );
 
@@ -775,5 +824,59 @@ abstract class WC_Stripe_Payment_Gateway extends WC_Payment_Gateway_CC {
 			'result'   => 'success',
 			'redirect' => wc_get_endpoint_url( 'payment-methods' ),
 		);
+	}
+
+	/**
+	 * Gets the locale with normalization that only Stripe accepts.
+	 *
+	 * @since 4.0.6
+	 * @return string $locale
+	 */
+	public function get_locale() {
+		$locale = get_locale();
+
+		/*
+		 * Stripe expects Norwegian to only be passed NO.
+		 * But WP has different dialects.
+		 */
+		if ( 'NO' === substr( $locale, 3, 2 ) ) {
+			$locale = 'no';
+		} else {
+			$locale = substr( get_locale(), 0, 2 );
+		}
+
+		return $locale;
+	}
+
+	/**
+	 * Change the idempotency key so charge can
+	 * process order as a different transaction.
+	 *
+	 * @since 4.0.6
+	 * @param string $idempotency_key
+	 * @param array $request
+	 */
+	public function change_idempotency_key( $idempotency_key, $request ) {
+		$customer = ! empty( $request['customer'] ) ? $request['customer'] : '';
+		$source   = ! empty( $request['source'] ) ? $request['source'] : $customer;
+		$count    = $this->retry_interval;
+
+		return $request['metadata']['order_id'] . '-' . $count . '-' . $source;
+	}
+
+	/**
+	 * Checks if request is the original to prevent double processing
+	 * on WC side. The original-request header and request-id header
+	 * needs to be the same to mean its the original request.
+	 *
+	 * @since 4.0.6
+	 * @param array $headers
+	 */
+	public function is_original_request( $headers ) {
+		if ( $headers['original-request'] === $headers['request-id'] ) {
+			return true;
+		}
+
+		return false;
 	}
 }

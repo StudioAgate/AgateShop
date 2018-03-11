@@ -6,8 +6,8 @@ jQuery( function( $ ) {
 	var stripe = Stripe( wc_stripe_params.key );
 
 	if ( 'yes' === wc_stripe_params.use_elements ) {
-		var stripe_elements_options = wc_stripe_params.elements_options.length ? wc_stripe_params.elements_options : {};
-		var elements = stripe.elements( stripe_elements_options ),
+		var stripe_elements_options = wc_stripe_params.elements_options.length ? wc_stripe_params.elements_options : {},
+			elements = stripe.elements( stripe_elements_options ),
 			stripe_card,
 			stripe_exp,
 			stripe_cvc;
@@ -29,12 +29,114 @@ jQuery( function( $ ) {
 				.replace( '%%endpoint%%', 'wc_stripe_' + endpoint );
 		},
 
+		unmountElements: function() {
+			if ( 'yes' === wc_stripe_params.inline_cc_form ) {
+				stripe_card.unmount( '#stripe-card-element' );
+			} else {
+				stripe_card.unmount( '#stripe-card-element' );
+				stripe_exp.unmount( '#stripe-exp-element' );
+				stripe_cvc.unmount( '#stripe-cvc-element' );
+			}
+		},
+
+		mountElements: function() {
+			if ( ! $( '#stripe-card-element' ).length ) {
+				return;
+			}
+			if ( 'yes' === wc_stripe_params.inline_cc_form ) {
+				stripe_card.mount( '#stripe-card-element' );
+			} else {
+				stripe_card.mount( '#stripe-card-element' );
+				stripe_exp.mount( '#stripe-exp-element' );
+				stripe_cvc.mount( '#stripe-cvc-element' );
+			}
+		},
+
+		createElements: function() {
+			var elementStyles = {
+				base: {
+					iconColor: '#666EE8',
+					color: '#31325F',
+					fontSize: '15px',
+					'::placeholder': {
+				  		color: '#CFD7E0',
+					}
+				}
+			};
+
+			var elementClasses = {
+				focus: 'focused',
+				empty: 'empty',
+				invalid: 'invalid',
+			};
+
+			elementStyles  = wc_stripe_params.elements_styling ? wc_stripe_params.elements_styling : elementStyles;
+			elementClasses = wc_stripe_params.elements_classes ? wc_stripe_params.elements_classes : elementClasses;
+
+			if ( 'yes' === wc_stripe_params.inline_cc_form ) {
+				stripe_card = elements.create( 'card', { style: elementStyles, hidePostalCode: true } );
+
+				stripe_card.addEventListener( 'change', function( event ) {
+					wc_stripe_form.onCCFormChange();
+
+					if ( event.error ) {
+						$( document.body ).trigger( 'stripeError', event );
+					}
+				} );
+			} else {
+				stripe_card = elements.create( 'cardNumber', { style: elementStyles, classes: elementClasses } );
+				stripe_exp  = elements.create( 'cardExpiry', { style: elementStyles, classes: elementClasses } );
+				stripe_cvc  = elements.create( 'cardCvc', { style: elementStyles, classes: elementClasses } );
+
+				stripe_card.addEventListener( 'change', function( event ) {
+					wc_stripe_form.onCCFormChange();
+
+					if ( event.error ) {
+						$( document.body ).trigger( 'stripeError', event );
+					}
+				} );
+
+				stripe_exp.addEventListener( 'change', function( event ) {
+					wc_stripe_form.onCCFormChange();
+
+					if ( event.error ) {
+						$( document.body ).trigger( 'stripeError', event );
+					}
+				} );
+
+				stripe_cvc.addEventListener( 'change', function( event ) {
+					wc_stripe_form.onCCFormChange();
+
+					if ( event.error ) {
+						$( document.body ).trigger( 'stripeError', event );
+					}
+				} );
+			}
+
+			/**
+			 * Only in checkout page we need to delay the mounting of the
+			 * card as some AJAX process needs to happen before we do.
+			 */
+			if ( 'yes' === wc_stripe_params.is_checkout ) {
+				$( document.body ).on( 'updated_checkout', function() {
+					// Don't mount elements a second time.
+					if ( stripe_card ) {
+						wc_stripe_form.unmountElements();
+					}
+
+					wc_stripe_form.mountElements();
+				} );
+			} else if ( $( 'form#add_payment_method' ).length || $( 'form#order_review' ).length ) {
+				wc_stripe_form.mountElements();
+			}
+		},
+
 		/**
 		 * Initialize event handlers and UI state.
 		 */
 		init: function() {
 			// Initialize tokenization script if on change payment method page and pay for order page.
-			if ( 'yes' === wc_stripe_params.is_change_payment_page ) {
+			if ( 'yes' === wc_stripe_params.is_change_payment_page || 'yes' === wc_stripe_params.is_pay_for_order_page ) {
 				$( document.body ).trigger( 'wc-credit-card-form-init' );
 			}
 
@@ -57,7 +159,7 @@ jQuery( function( $ ) {
 				this.form = $( 'form#order_review' );
 			}
 
-			$( 'form#order_review' )
+			$( 'form#order_review, form#add_payment_method' )
 				.on(
 					'submit',
 					this.onSubmit
@@ -68,16 +170,9 @@ jQuery( function( $ ) {
 				this.form = $( 'form#add_payment_method' );
 			}
 
-			$( 'form#add_payment_method' )
-				.on(
-					'submit',
-					this.onSubmit
-				);
-
 			$( 'form.woocommerce-checkout' )
 				.on(
 					'change',
-					'#stripe-bank-country',
 					this.reset
 				);
 
@@ -91,101 +186,8 @@ jQuery( function( $ ) {
 					this.reset
 				);
 
-			var elementStyles = {
-				base: {
-					iconColor: '#666EE8',
-					color: '#31325F',
-					fontSize: '15px',
-					'::placeholder': {
-				  		color: '#CFD7E0',
-					}
-				}
-			};
-
-			var elementClasses = {
-				focus: 'focused',
-				empty: 'empty',
-				invalid: 'invalid',
-			};
-
-			if ( 'yes' === wc_stripe_params.use_elements && $( '#stripe-card-element' ).length ) {
-				elementStyles  = wc_stripe_params.elements_styling ? wc_stripe_params.elements_styling : elementStyles;
-				elementClasses = wc_stripe_params.elements_classes ? wc_stripe_params.elements_classes : elementClasses;
-
-				if ( 'yes' === wc_stripe_params.inline_cc_form ) {
-					stripe_card = elements.create( 'card', { style: elementStyles, hidePostalCode: true } );
-
-					stripe_card.addEventListener( 'change', function( event ) {
-						wc_stripe_form.onCCFormChange();
-
-						if ( event.error ) {
-							$( document.body ).trigger( 'stripeError', event );
-						}
-					} );
-				} else {
-					stripe_card = elements.create( 'cardNumber', { style: elementStyles, classes: elementClasses } );
-					stripe_exp  = elements.create( 'cardExpiry', { style: elementStyles, classes: elementClasses } );
-					stripe_cvc  = elements.create( 'cardCvc', { style: elementStyles, classes: elementClasses } );
-
-					stripe_card.addEventListener( 'change', function( event ) {
-						wc_stripe_form.onCCFormChange();
-
-						if ( event.error ) {
-							$( document.body ).trigger( 'stripeError', event );
-						}
-					} );
-
-					stripe_exp.addEventListener( 'change', function( event ) {
-						wc_stripe_form.onCCFormChange();
-
-						if ( event.error ) {
-							$( document.body ).trigger( 'stripeError', event );
-						}
-					} );
-
-					stripe_cvc.addEventListener( 'change', function( event ) {
-						wc_stripe_form.onCCFormChange();
-
-						if ( event.error ) {
-							$( document.body ).trigger( 'stripeError', event );
-						}
-					} );
-				}
-
-				/**
-				 * Only in checkout page we need to delay the mounting of the
-				 * card as some AJAX process needs to happen before we do.
-				 */
-				if ( wc_stripe_params.is_checkout ) {
-					$( document.body ).on( 'updated_checkout', function() {
-						// Don't mount elements a second time.
-						if ( stripe_card ) {
-							if ( 'yes' === wc_stripe_params.inline_cc_form ) {
-								stripe_card.unmount( '#stripe-card-element' );
-							} else {
-								stripe_card.unmount( '#stripe-card-element' );
-								stripe_exp.unmount( '#stripe-exp-element' );
-								stripe_cvc.unmount( '#stripe-cvc-element' );
-							}
-						}
-
-						if ( 'yes' === wc_stripe_params.inline_cc_form ) {
-							stripe_card.mount( '#stripe-card-element' );
-						} else {
-							stripe_card.mount( '#stripe-card-element' );
-							stripe_exp.mount( '#stripe-exp-element' );
-							stripe_cvc.mount( '#stripe-cvc-element' );
-						}
-					});
-				} else if ( $( 'form#add_payment_method' ).length || $( 'form#order_review' ).length ) {
-					if ( 'yes' === wc_stripe_params.inline_cc_form ) {
-						stripe_card.mount( '#stripe-card-element' );
-					} else {
-						stripe_card.mount( '#stripe-card-element' );
-						stripe_exp.mount( '#stripe-exp-element' );
-						stripe_cvc.mount( '#stripe-cvc-element' );
-					}
-				}
+			if ( 'yes' === wc_stripe_params.use_elements ) {
+				wc_stripe_form.createElements();
 			}
 		},
 
@@ -272,15 +274,7 @@ jQuery( function( $ ) {
 		},
 
 		block: function() {
-			if ( wc_stripe_form.isMobile() ) {
-				$.blockUI({
-					message: null,
-					overlayCSS: {
-						background: '#fff',
-						opacity: 0.6
-					}
-				});
-			} else {
+			if ( ! wc_stripe_form.isMobile() ) {
 				wc_stripe_form.form.block({
 					message: null,
 					overlayCSS: {
@@ -292,11 +286,7 @@ jQuery( function( $ ) {
 		},
 
 		unblock: function() {
-			if ( wc_stripe_form.isMobile() ) {
-				$.unblockUI();
-			} else {
-				wc_stripe_form.form.unblock();
-			}
+			wc_stripe_form.form.unblock();
 		},
 
 		getSelectedPaymentElement: function() {
@@ -354,45 +344,6 @@ jQuery( function( $ ) {
 
 		// Stripe Checkout.
 		onClose: function() {
-			wc_stripe_form.unblock();
-		},
-
-		onError: function( e, result ) {
-			var message = result.error.message,
-				errorContainer = wc_stripe_form.getSelectedPaymentElement().parents( 'li' ).eq(0).find( '.stripe-source-errors' );
-
-			/*
-			 * Customers do not need to know the specifics of the below type of errors
-			 * therefore return a generic localizable error message.
-			 */
-			if (
-				'invalid_request_error' === result.error.type ||
-				'api_connection_error'  === result.error.type ||
-				'api_error'             === result.error.type ||
-				'authentication_error'  === result.error.type ||
-				'rate_limit_error'      === result.error.type
-			) {
-				message = wc_stripe_params.invalid_request_error;
-			}
-
-			if ( 'card_error' === result.error.type && wc_stripe_params.hasOwnProperty( result.error.code ) ) {
-				message = wc_stripe_params[ result.error.code ];
-			}
-
-			if ( 'validation_error' === result.error.type && wc_stripe_params.hasOwnProperty( result.error.code ) ) {
-				message = wc_stripe_params[ result.error.code ];
-			}
-
-			wc_stripe_form.reset();
-			$( '.woocommerce-NoticeGroup-checkout' ).remove();
-			console.log( result.error.message ); // Leave for troubleshooting.
-			$( errorContainer ).html( '<ul class="woocommerce_error woocommerce-error wc-stripe-error"><li>' + message + '</li></ul>' );
-
-			if ( $( '.wc-stripe-error' ).length ) {
-				$( 'html, body' ).animate({
-					scrollTop: ( $( '.wc-stripe-error' ).offset().top - 200 )
-				}, 200 );
-			}
 			wc_stripe_form.unblock();
 		},
 
@@ -624,16 +575,20 @@ jQuery( function( $ ) {
 		},
 
 		onSubmit: function( e ) {
-			if ( wc_stripe_form.isStripeChosen() && ! wc_stripe_form.isStripeSaveCardChosen() && ! wc_stripe_form.hasSource() && ! wc_stripe_form.hasToken() ) {
+			if ( ! wc_stripe_form.isStripeChosen() ) {
+				return;
+			}
+
+			if ( ! wc_stripe_form.isStripeSaveCardChosen() && ! wc_stripe_form.hasSource() && ! wc_stripe_form.hasToken() ) {
 				e.preventDefault();
 
 				// Stripe Checkout.
 				if ( 'yes' === wc_stripe_params.is_stripe_checkout && wc_stripe_form.isStripeModalNeeded() && wc_stripe_form.isStripeCardChosen() ) {
 					// Since in mobile actions cannot be deferred, no dynamic validation applied.
-					if ( wc_stripe_form.isMobile() ) {
+					if ( wc_stripe_form.isMobile() || 'no' === wc_stripe_params.validate_modal_checkout ) {
 						wc_stripe_form.openModal();
 					} else {
-						wc_stripe_form.validateCheckout( 'modal' );
+						wc_stripe_form.validateCheckout();
 					}
 
 					return false;
@@ -680,10 +635,6 @@ jQuery( function( $ ) {
 								this.onSubmit
 							);
 
-						if ( wc_stripe_form.isMobile() ) {
-							wc_stripe_form.unblock();
-						}
-
 						wc_stripe_form.form.submit();
 					}
 
@@ -693,10 +644,6 @@ jQuery( function( $ ) {
 								'submit',
 								this.onSubmit
 							);
-
-						if ( wc_stripe_form.isMobile() ) {
-							wc_stripe_form.unblock();
-						}
 
 						return true;
 					}
@@ -708,20 +655,11 @@ jQuery( function( $ ) {
 								this.onSubmit
 							);
 
-						if ( wc_stripe_form.isMobile() ) {
-							wc_stripe_form.unblock();
-						}
-
 						wc_stripe_form.form.submit();
 					}
 				}
 
-				// We don't need to run validate on non checkout pages.
-				if ( wc_stripe_params.is_checkout ) {
-					wc_stripe_form.validateCheckout();
-				} else {
-					wc_stripe_form.createSource();
-				}
+				wc_stripe_form.createSource();
 
 				// Prevent form submitting
 				return false;
@@ -753,7 +691,7 @@ jQuery( function( $ ) {
 		},
 
 		reset: function() {
-			$( '.wc-stripe-error, .stripe-source, .stripe_token, .stripe-checkout-object' ).remove();
+			$( '.wc-stripe-error, .stripe-source, .stripe_token' ).remove();
 
 			// Stripe Checkout.
 			if ( 'yes' === wc_stripe_params.is_stripe_checkout ) {
@@ -762,56 +700,70 @@ jQuery( function( $ ) {
 		},
 
 		getRequiredFields: function() {
-			return wc_stripe_form.form.find( '.form-row.validate-required > input, .form-row.validate-required > select, .form-row.validate-required > textarea' );
+			return wc_stripe_form.form.find( '.form-row.validate-required > input:visible, .form-row.validate-required > select:visible, .form-row.validate-required > textarea:visible' );
 		},
 
-		validateCheckout: function( type ) {
-			if ( typeof type === 'undefined' ) {
-				type = '';
-			}
-
+		validateCheckout: function() {
 			var data = {
 				'nonce': wc_stripe_params.stripe_nonce,
 				'required_fields': wc_stripe_form.getRequiredFields().serialize(),
-				'all_fields': wc_stripe_form.form.serialize(),
-				'source_type': wc_stripe_form.getSelectedPaymentElement().val(),
-				'is_add_payment_page': wc_stripe_params.is_add_payment_method_page
+				'all_fields': wc_stripe_form.form.serialize()
 			};
 
-			$.ajax({
+			$.ajax( {
 				type:		'POST',
 				url:		wc_stripe_form.getAjaxURL( 'validate_checkout' ),
 				data:		data,
 				dataType:   'json',
 				success:	function( result ) {
 					if ( 'success' === result ) {
-						// Stripe Checkout.
-						if ( 'modal' === type ) {
-							wc_stripe_form.openModal();
-						} else {
-							if ( wc_stripe_form.isSepaChosen() ) {
-								// Check if SEPA owner is filled before proceed.
-								if ( '' === $( '#stripe-sepa-owner' ).val() ) {
-									$( document.body ).trigger( 'stripeError', { error: { message: wc_stripe_params.no_sepa_owner_msg } } );
-									return false;
-								}
-
-								// Check if SEPA IBAN is filled before proceed.
-								if ( '' === $( '#stripe-sepa-iban' ).val() ) {
-									$( document.body ).trigger( 'stripeError', { error: { message: wc_stripe_params.no_sepa_iban_msg } } );
-									return false;
-								}
-							}
-
-							wc_stripe_form.createSource();
-						}
+						wc_stripe_form.openModal();
 					} else if ( result.messages ) {
 						wc_stripe_form.resetModal();
 						wc_stripe_form.reset();
 						wc_stripe_form.submitError( result.messages );
 					}
 				}
-			});
+			} );
+		},
+
+		onError: function( e, result ) {
+			var message = result.error.message,
+				errorContainer = wc_stripe_form.getSelectedPaymentElement().parents( 'li' ).eq(0).find( '.stripe-source-errors' );
+
+			/*
+			 * Customers do not need to know the specifics of the below type of errors
+			 * therefore return a generic localizable error message.
+			 */
+			if (
+				'invalid_request_error' === result.error.type ||
+				'api_connection_error'  === result.error.type ||
+				'api_error'             === result.error.type ||
+				'authentication_error'  === result.error.type ||
+				'rate_limit_error'      === result.error.type
+			) {
+				message = wc_stripe_params.invalid_request_error;
+			}
+
+			if ( 'card_error' === result.error.type && wc_stripe_params.hasOwnProperty( result.error.code ) ) {
+				message = wc_stripe_params[ result.error.code ];
+			}
+
+			if ( 'validation_error' === result.error.type && wc_stripe_params.hasOwnProperty( result.error.code ) ) {
+				message = wc_stripe_params[ result.error.code ];
+			}
+
+			wc_stripe_form.reset();
+			$( '.woocommerce-NoticeGroup-checkout' ).remove();
+			console.log( result.error.message ); // Leave for troubleshooting.
+			$( errorContainer ).html( '<ul class="woocommerce_error woocommerce-error wc-stripe-error"><li>' + message + '</li></ul>' );
+
+			if ( $( '.wc-stripe-error' ).length ) {
+				$( 'html, body' ).animate({
+					scrollTop: ( $( '.wc-stripe-error' ).offset().top - 200 )
+				}, 200 );
+			}
+			wc_stripe_form.unblock();
 		},
 
 		submitError: function( error_message ) {

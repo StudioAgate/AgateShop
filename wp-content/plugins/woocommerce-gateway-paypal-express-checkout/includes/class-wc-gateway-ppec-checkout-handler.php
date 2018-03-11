@@ -640,7 +640,7 @@ class WC_Gateway_PPEC_Checkout_Handler {
 
 			WC()->session->paypal = new WC_Gateway_PPEC_Session_Data( $session_data_args );
 
-			return $settings->get_paypal_redirect_url( $response['TOKEN'], false, $session_data_args['use_paypal_credit'] );
+			return $settings->get_paypal_redirect_url( $response['TOKEN'], true, $session_data_args['use_paypal_credit'] );
 		} else {
 			throw new PayPal_API_Exception( $response );
 		}
@@ -701,6 +701,10 @@ class WC_Gateway_PPEC_Checkout_Handler {
 	 * @return bool Returns true if buyer checkout from checkout page
 	 */
 	public function is_started_from_checkout_page() {
+		if ( ! is_object( WC()->session ) ) {
+			return false;
+		}
+
 		$session = WC()->session->get( 'paypal' );
 
 		return (

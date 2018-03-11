@@ -99,7 +99,7 @@ class WC_Gateway_Stripe_Bitcoin extends WC_Stripe_Payment_Gateway {
 		add_action( 'wp_enqueue_scripts', array( $this, 'payment_scripts' ) );
 		add_action( 'woocommerce_thankyou_stripe_bitcoin', array( $this, 'thankyou_page' ) );
 
-		// Customer Emails
+		// Customer Emails.
 		add_action( 'woocommerce_email_before_order_table', array( $this, 'email_instructions' ), 10, 3 );
 	}
 
@@ -368,7 +368,7 @@ class WC_Gateway_Stripe_Bitcoin extends WC_Stripe_Payment_Gateway {
 				$new_stripe_customer->create_customer();
 			}
 
-			$prepared_source = $this->prepare_source( $this->get_source_object(), get_current_user_id(), $force_save_source );
+			$prepared_source = $this->prepare_source( get_current_user_id(), $force_save_source );
 
 			if ( empty( $prepared_source->source ) ) {
 				$localized_message = __( 'Payment processing failed. Please retry.', 'woocommerce-gateway-stripe' );
@@ -380,17 +380,17 @@ class WC_Gateway_Stripe_Bitcoin extends WC_Stripe_Payment_Gateway {
 			// This will throw exception if not valid.
 			$this->validate_minimum_order_amount( $order );
 
-			$this->save_instructions( $order, $this->get_source_object() );
+			$this->save_instructions( $order, $this->get_source_object( $prepared_source->source ) );
 
-			// Mark as on-hold (we're awaiting the payment)
+			// Mark as on-hold (we're awaiting the payment).
 			$order->update_status( 'on-hold', __( 'Awaiting Bitcoin payment', 'woocommerce-gateway-stripe' ) );
 
 			wc_reduce_stock_levels( $order_id );
 
-			// Remove cart
+			// Remove cart.
 			WC()->cart->empty_cart();
 
-			// Return thankyou redirect
+			// Return thankyou redirect.
 			return array(
 				'result'    => 'success',
 				'redirect'  => $this->get_return_url( $order ),
